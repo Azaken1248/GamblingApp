@@ -18,6 +18,7 @@ from models.stake_management import SessionEndReason, SessionStatus, Transaction
 from services.betting_service import BettingService
 from services.stake_management_service import StakeManagementService, _to_money
 from utils.exceptions import NotFoundException, ValidationErrorType, ValidationException
+from utils.input_validator import validation_guard
 
 _RATE_QUANTUM = Decimal("0.0001")
 _ZERO = Decimal("0.00")
@@ -33,6 +34,7 @@ class GameSessionManager:
     ) -> None:
         self._database = database
         self._settings = settings
+        self._last_validation_result = None
         self._stake_service = stake_management_service or StakeManagementService(
             database=database,
             settings=settings,
@@ -43,6 +45,10 @@ class GameSessionManager:
             stake_management_service=self._stake_service,
         )
 
+    @validation_guard(
+        operation_name="UC6_START_SESSION",
+        validator_method="validate_session_start_request",
+    )
     def start_new_session(
         self,
         gambler_id: int,

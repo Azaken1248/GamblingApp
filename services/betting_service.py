@@ -15,6 +15,7 @@ from strategies.fixed_amount_strategy import FixedAmountStrategy
 from strategies.martingale_strategy import MartingaleStrategy
 from strategies.percentage_strategy import PercentageStrategy
 from utils.exceptions import NotFoundException, ValidationErrorType, ValidationException
+from utils.input_validator import validation_guard
 
 _RATE_QUANTUM = Decimal("0.0001")
 _ZERO = Decimal("0.00")
@@ -30,12 +31,17 @@ class BettingService:
     ) -> None:
         self._database = database
         self._settings = settings
+        self._last_validation_result = None
         self._stake_service = stake_management_service or StakeManagementService(
             database=database,
             settings=settings,
         )
         self._rng = rng or Random()
 
+    @validation_guard(
+        operation_name="UC6_PLACE_BET",
+        validator_method="validate_bet_request",
+    )
     def place_bet(
         self,
         gambler_id: int,
@@ -58,6 +64,10 @@ class BettingService:
             base_amount=None,
         )
 
+    @validation_guard(
+        operation_name="UC6_PLACE_BET_WITH_STRATEGY",
+        validator_method="validate_bet_request",
+    )
     def place_bet_with_strategy(
         self,
         gambler_id: int,

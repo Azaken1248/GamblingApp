@@ -19,6 +19,7 @@ from tracking_and_reports.stake_history_report import (
     StakeMonitorSummary,
 )
 from utils.exceptions import NotFoundException, ValidationErrorType, ValidationException
+from utils.input_validator import validation_guard
 
 _MONEY_QUANTUM = Decimal("0.01")
 _RATE_QUANTUM = Decimal("0.0001")
@@ -47,7 +48,12 @@ class StakeManagementService:
     def __init__(self, database: Database, settings: Settings) -> None:
         self._database = database
         self._settings = settings
+        self._last_validation_result = None
 
+    @validation_guard(
+        operation_name="UC6_INITIALIZE_STAKE_SESSION",
+        validator_method="validate_session_start_request",
+    )
     def initialize_stake_session(
         self,
         gambler_id: int,
@@ -184,6 +190,10 @@ class StakeManagementService:
 
         return _to_money(row["current_stake"], "current_stake")
 
+    @validation_guard(
+        operation_name="UC6_PROCESS_BET_OUTCOME",
+        validator_method="validate_bet_request",
+    )
     def process_bet_outcome(
         self,
         gambler_id: int,
