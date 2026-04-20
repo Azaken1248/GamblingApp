@@ -399,6 +399,7 @@ class BettingService:
                 cursor=cursor,
                 session_id=session_id,
                 starting_stake=_to_money(session_row["starting_stake"], "starting_stake"),
+                game_id=game_id,
             )
 
             cursor.execute(

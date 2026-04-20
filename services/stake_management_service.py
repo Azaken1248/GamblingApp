@@ -868,6 +868,7 @@ class StakeManagementService:
         cursor: Any,
         session_id: int,
         starting_stake: Decimal,
+        game_id: int | None = None,
     ) -> None:
         cursor.execute(
             """
@@ -969,7 +970,7 @@ class StakeManagementService:
             """,
             (
                 session_id,
-                None,
+                game_id,
                 total_games,
                 total_wins,
                 total_losses,

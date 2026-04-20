@@ -5,6 +5,11 @@ from tracking_and_reports.stake_history_report import (
     StakeHistoryReport,
     StakeMonitorSummary,
 )
+from tracking_and_reports.win_loss_statistics import (
+	OddsConfiguration,
+	RunningTotalsByGame,
+	WinLossStatistics,
+)
 
 __all__ = [
 	"EligibilityStatus",
@@ -13,4 +18,7 @@ __all__ = [
 	"StakeHistoryItem",
 	"StakeHistoryReport",
 	"StakeMonitorSummary",
+	"OddsConfiguration",
+	"RunningTotalsByGame",
+	"WinLossStatistics",
 ]
