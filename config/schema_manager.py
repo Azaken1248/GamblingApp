@@ -9,6 +9,10 @@ class SchemaManager:
         self._database = database
 
     def initialize_uc1_schema(self) -> None:
+        """Backward-compatible initializer for existing callers."""
+        self.initialize_uc2_schema()
+
+    def initialize_uc2_schema(self) -> None:
         self._database.ensure_database_exists()
 
         with self._database.session() as (connection, cursor):
@@ -85,15 +89,91 @@ class SchemaManager:
                 FOREIGN KEY (gambler_id)
                 REFERENCES GAMBLERS(gambler_id)
                 ON DELETE RESTRICT,
+            CONSTRAINT fk_stake_transactions_session
+                FOREIGN KEY (session_id)
+                REFERENCES SESSIONS(session_id)
+                ON DELETE SET NULL,
             CONSTRAINT chk_stake_transactions_non_negative_balances
                 CHECK (balance_before >= 0 AND balance_after >= 0),
             INDEX idx_stake_transactions_gambler_created (gambler_id, created_at),
+            INDEX idx_stake_transactions_session_created (session_id, created_at),
             INDEX idx_stake_transactions_type_created (transaction_type, created_at)
+        )
+        """
+
+        sessions = """
+        CREATE TABLE IF NOT EXISTS SESSIONS (
+            session_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            gambler_id BIGINT NOT NULL,
+            status ENUM(
+                'INITIALIZED',
+                'ACTIVE',
+                'PAUSED',
+                'ENDED_WIN',
+                'ENDED_LOSS',
+                'ENDED_MANUAL',
+                'ENDED_TIMEOUT'
+            ) NOT NULL DEFAULT 'INITIALIZED',
+            end_reason ENUM(
+                'UPPER_LIMIT_REACHED',
+                'LOWER_LIMIT_REACHED',
+                'MANUAL_STOP',
+                'TIMEOUT',
+                'NOT_ENDED'
+            ) NULL,
+            starting_stake DECIMAL(18, 2) NOT NULL,
+            ending_stake DECIMAL(18, 2) NULL,
+            peak_stake DECIMAL(18, 2) NOT NULL,
+            lowest_stake DECIMAL(18, 2) NOT NULL,
+            lower_limit DECIMAL(18, 2) NOT NULL,
+            upper_limit DECIMAL(18, 2) NOT NULL,
+            max_games INT NOT NULL,
+            games_played INT NOT NULL DEFAULT 0,
+            total_pause_seconds INT NOT NULL DEFAULT 0,
+            started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            ended_at DATETIME NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_sessions_gambler
+                FOREIGN KEY (gambler_id)
+                REFERENCES GAMBLERS(gambler_id)
+                ON DELETE RESTRICT,
+            CONSTRAINT chk_sessions_limits_order CHECK (upper_limit > lower_limit),
+            CONSTRAINT chk_sessions_games_non_negative CHECK (games_played >= 0),
+            INDEX idx_sessions_gambler_status (gambler_id, status),
+            INDEX idx_sessions_started_at (started_at)
+        )
+        """
+
+        running_totals_snapshots = """
+        CREATE TABLE IF NOT EXISTS RUNNING_TOTALS_SNAPSHOTS (
+            snapshot_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            session_id BIGINT NOT NULL,
+            game_id BIGINT NULL,
+            total_games INT NOT NULL DEFAULT 0,
+            total_wins INT NOT NULL DEFAULT 0,
+            total_losses INT NOT NULL DEFAULT 0,
+            total_pushes INT NOT NULL DEFAULT 0,
+            total_winnings DECIMAL(18, 2) NOT NULL DEFAULT 0.00,
+            total_losses_amount DECIMAL(18, 2) NOT NULL DEFAULT 0.00,
+            net_profit DECIMAL(18, 2) NOT NULL DEFAULT 0.00,
+            win_rate DECIMAL(10, 4) NOT NULL DEFAULT 0.0000,
+            profit_factor DECIMAL(18, 4) NOT NULL DEFAULT 0.0000,
+            roi DECIMAL(18, 4) NOT NULL DEFAULT 0.0000,
+            longest_win_streak INT NOT NULL DEFAULT 0,
+            longest_loss_streak INT NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_running_totals_session
+                FOREIGN KEY (session_id)
+                REFERENCES SESSIONS(session_id)
+                ON DELETE CASCADE,
+            INDEX idx_running_totals_session_created (session_id, created_at)
         )
         """
 
         return (
             gamblers,
             betting_preferences,
+            sessions,
             stake_transactions,
+            running_totals_snapshots,
         )
