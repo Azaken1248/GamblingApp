@@ -10,17 +10,21 @@ class SchemaManager:
 
     def initialize_uc1_schema(self) -> None:
         """Backward-compatible initializer for existing callers."""
-        self.initialize_uc4_schema()
+        self.initialize_uc5_schema()
 
     def initialize_uc2_schema(self) -> None:
         """Backward-compatible initializer for existing callers."""
-        self.initialize_uc4_schema()
+        self.initialize_uc5_schema()
 
     def initialize_uc3_schema(self) -> None:
         """Backward-compatible initializer for existing callers."""
-        self.initialize_uc4_schema()
+        self.initialize_uc5_schema()
 
     def initialize_uc4_schema(self) -> None:
+        """Backward-compatible initializer for existing callers."""
+        self.initialize_uc5_schema()
+
+    def initialize_uc5_schema(self) -> None:
         self._database.ensure_database_exists()
 
         with self._database.session() as (connection, cursor):
@@ -153,6 +157,25 @@ class SchemaManager:
         )
         """
 
+        odds_configurations = """
+        CREATE TABLE IF NOT EXISTS ODDS_CONFIGURATIONS (
+            odds_config_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            odds_type ENUM('FIXED', 'PROBABILITY_BASED', 'AMERICAN', 'DECIMAL') NOT NULL UNIQUE,
+            fixed_multiplier DECIMAL(10, 4) NULL,
+            american_odds INT NULL,
+            decimal_odds DECIMAL(10, 4) NULL,
+            probability_payout_factor DECIMAL(10, 4) NULL,
+            house_edge DECIMAL(5, 4) NOT NULL DEFAULT 0.0000,
+            is_default BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            CONSTRAINT chk_odds_configurations_house_edge_range CHECK (
+                house_edge >= 0 AND house_edge < 1
+            ),
+            INDEX idx_odds_configurations_default (is_default)
+        )
+        """
+
         bets = """
         CREATE TABLE IF NOT EXISTS BETS (
             bet_id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -162,7 +185,7 @@ class SchemaManager:
             game_index INT NOT NULL,
             bet_amount DECIMAL(18, 2) NOT NULL,
             win_probability DECIMAL(5, 4) NOT NULL,
-            odds_type ENUM('FIXED') NOT NULL DEFAULT 'FIXED',
+            odds_type ENUM('FIXED', 'PROBABILITY_BASED', 'AMERICAN', 'DECIMAL') NOT NULL DEFAULT 'FIXED',
             odds_value DECIMAL(10, 4) NOT NULL DEFAULT 1.0000,
             potential_win DECIMAL(18, 2) NOT NULL,
             stake_before DECIMAL(18, 2) NOT NULL,
@@ -193,6 +216,7 @@ class SchemaManager:
             game_id BIGINT AUTO_INCREMENT PRIMARY KEY,
             session_id BIGINT NOT NULL,
             bet_id BIGINT NOT NULL UNIQUE,
+            odds_config_id BIGINT NULL,
             outcome ENUM('WIN', 'LOSS') NOT NULL,
             payout_amount DECIMAL(18, 2) NOT NULL DEFAULT 0.00,
             loss_amount DECIMAL(18, 2) NOT NULL DEFAULT 0.00,
@@ -211,6 +235,10 @@ class SchemaManager:
                 FOREIGN KEY (bet_id)
                 REFERENCES BETS(bet_id)
                 ON DELETE CASCADE,
+            CONSTRAINT fk_game_records_odds_config
+                FOREIGN KEY (odds_config_id)
+                REFERENCES ODDS_CONFIGURATIONS(odds_config_id)
+                ON DELETE SET NULL,
             CONSTRAINT chk_game_records_stake_non_negative CHECK (stake_after >= 0),
             INDEX idx_game_records_session_resolved (session_id, resolved_at)
         )
@@ -306,7 +334,12 @@ class SchemaManager:
                 FOREIGN KEY (session_id)
                 REFERENCES SESSIONS(session_id)
                 ON DELETE CASCADE,
-            INDEX idx_running_totals_session_created (session_id, created_at)
+            CONSTRAINT fk_running_totals_game
+                FOREIGN KEY (game_id)
+                REFERENCES GAME_RECORDS(game_id)
+                ON DELETE SET NULL,
+            INDEX idx_running_totals_session_created (session_id, created_at),
+            INDEX idx_running_totals_session_game (session_id, game_id)
         )
         """
 
@@ -316,6 +349,7 @@ class SchemaManager:
             sessions,
             session_parameters,
             betting_strategies,
+            odds_configurations,
             bets,
             game_records,
             pause_records,
@@ -326,6 +360,29 @@ class SchemaManager:
     @staticmethod
     def _seed_statements() -> tuple[str, ...]:
         return (
+            """
+            INSERT INTO ODDS_CONFIGURATIONS (
+                odds_type,
+                fixed_multiplier,
+                american_odds,
+                decimal_odds,
+                probability_payout_factor,
+                house_edge,
+                is_default
+            )
+            VALUES
+                ('FIXED', 1.0000, NULL, NULL, NULL, 0.0000, TRUE),
+                ('PROBABILITY_BASED', NULL, NULL, NULL, 1.0000, 0.0200, FALSE),
+                ('AMERICAN', NULL, 100, NULL, NULL, 0.0200, FALSE),
+                ('DECIMAL', NULL, NULL, 2.0000, NULL, 0.0200, FALSE)
+            ON DUPLICATE KEY UPDATE
+                fixed_multiplier = VALUES(fixed_multiplier),
+                american_odds = VALUES(american_odds),
+                decimal_odds = VALUES(decimal_odds),
+                probability_payout_factor = VALUES(probability_payout_factor),
+                house_edge = VALUES(house_edge),
+                is_default = VALUES(is_default)
+            """,
             """
             INSERT INTO BETTING_STRATEGIES (
                 strategy_code,
