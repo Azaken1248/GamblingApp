@@ -26,7 +26,7 @@ def validation_guard(
     operation_name: str,
     validator_method: str,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Decorator that runs UC-06 validation before service execution."""
+    """Decorator that runs pre-execution input validation."""
 
     def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
         function_signature = inspect.signature(function)
@@ -894,7 +894,6 @@ class InputValidator:
                     )
                 connection.commit()
         except Exception:
-            # Validation logging should not block core business flow.
             return
 
     @staticmethod

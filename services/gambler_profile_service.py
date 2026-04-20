@@ -252,6 +252,43 @@ class GamblerProfileService:
 
         return self._profile_from_mapping(row)
 
+    def list_profiles(self, *, limit: int = 20) -> tuple[GamblerProfile, ...]:
+        if limit <= 0:
+            raise ValidationException(
+                error_type=ValidationErrorType.RANGE_ERROR,
+                field_name="limit",
+                attempted_value=limit,
+                message="limit must be a positive integer.",
+            )
+
+        bounded_limit = min(limit, 100)
+
+        with self._database.session(dictionary=True) as (_, cursor):
+            cursor.execute(
+                """
+                SELECT
+                    gambler_id,
+                    username,
+                    full_name,
+                    email,
+                    is_active,
+                    initial_stake,
+                    current_stake,
+                    win_threshold,
+                    loss_threshold,
+                    min_required_stake,
+                    created_at,
+                    updated_at
+                FROM GAMBLERS
+                ORDER BY gambler_id DESC
+                LIMIT %s
+                """,
+                (bounded_limit,),
+            )
+            rows = cursor.fetchall()
+
+        return tuple(self._profile_from_mapping(row) for row in rows)
+
     def retrieve_profile_statistics(self, gambler_id: int) -> GamblerStatistics:
         self._validate_gambler_id(gambler_id)
 

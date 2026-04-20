@@ -51,7 +51,7 @@ class StakeManagementService:
         self._last_validation_result = None
 
     @validation_guard(
-        operation_name="UC6_INITIALIZE_STAKE_SESSION",
+        operation_name="INITIALIZE_STAKE_SESSION",
         validator_method="validate_session_start_request",
     )
     def initialize_stake_session(
@@ -191,7 +191,7 @@ class StakeManagementService:
         return _to_money(row["current_stake"], "current_stake")
 
     @validation_guard(
-        operation_name="UC6_PROCESS_BET_OUTCOME",
+        operation_name="PROCESS_BET_OUTCOME",
         validator_method="validate_bet_request",
     )
     def process_bet_outcome(

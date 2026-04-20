@@ -8,27 +8,7 @@ class SchemaManager:
     def __init__(self, database: Database) -> None:
         self._database = database
 
-    def initialize_uc1_schema(self) -> None:
-        """Backward-compatible initializer for existing callers."""
-        self.initialize_uc6_schema()
-
-    def initialize_uc2_schema(self) -> None:
-        """Backward-compatible initializer for existing callers."""
-        self.initialize_uc6_schema()
-
-    def initialize_uc3_schema(self) -> None:
-        """Backward-compatible initializer for existing callers."""
-        self.initialize_uc6_schema()
-
-    def initialize_uc4_schema(self) -> None:
-        """Backward-compatible initializer for existing callers."""
-        self.initialize_uc6_schema()
-
-    def initialize_uc5_schema(self) -> None:
-        """Backward-compatible initializer for existing callers."""
-        self.initialize_uc6_schema()
-
-    def initialize_uc6_schema(self) -> None:
+    def initialize_schema(self) -> None:
         self._database.ensure_database_exists()
 
         with self._database.session() as (connection, cursor):

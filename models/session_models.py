@@ -40,6 +40,7 @@ class SessionLifecycleState:
     status: SessionStatus
     end_reason: Optional[SessionEndReason]
     games_played: int
+    max_games: int
     started_at: datetime
     ended_at: Optional[datetime]
 
@@ -63,6 +64,17 @@ class SessionSummary:
     lowest_stake: Decimal
     total_wins: int
     total_losses: int
+
+
+@dataclass(slots=True, frozen=True)
+class SessionListItem:
+    session_id: int
+    gambler_id: int
+    status: SessionStatus
+    games_played: int
+    started_at: datetime
+    ended_at: Optional[datetime]
+    current_stake: Decimal
 
 
 @dataclass(slots=True, frozen=True)

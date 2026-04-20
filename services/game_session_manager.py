@@ -10,6 +10,7 @@ from models.session_models import (
     PauseRecord,
     SessionContinuationResult,
     SessionDurationMetrics,
+    SessionListItem,
     SessionLifecycleState,
     SessionParameters,
     SessionSummary,
@@ -46,7 +47,7 @@ class GameSessionManager:
         )
 
     @validation_guard(
-        operation_name="UC6_START_SESSION",
+        operation_name="START_SESSION",
         validator_method="validate_session_start_request",
     )
     def start_new_session(
@@ -526,6 +527,67 @@ class GameSessionManager:
 
         return self._lifecycle_from_row(row)
 
+    def list_sessions(
+        self,
+        *,
+        gambler_id: int | None = None,
+        include_closed: bool = True,
+        limit: int = 20,
+    ) -> tuple[SessionListItem, ...]:
+        if gambler_id is not None:
+            self._validate_positive_id(gambler_id, "gambler_id")
+
+        bounded_limit = min(self._to_positive_int(limit, "limit"), 100)
+
+        query = """
+        SELECT
+            s.session_id,
+            s.gambler_id,
+            s.status,
+            s.games_played,
+            s.started_at,
+            s.ended_at,
+            g.current_stake
+        FROM SESSIONS s
+        JOIN GAMBLERS g ON g.gambler_id = s.gambler_id
+        WHERE 1 = 1
+        """
+        params: list[Any] = []
+
+        if gambler_id is not None:
+            query += " AND s.gambler_id = %s"
+            params.append(gambler_id)
+
+        if not include_closed:
+            query += " AND s.status IN (%s, %s, %s)"
+            params.extend(
+                [
+                    SessionStatus.INITIALIZED.value,
+                    SessionStatus.ACTIVE.value,
+                    SessionStatus.PAUSED.value,
+                ]
+            )
+
+        query += " ORDER BY s.session_id DESC LIMIT %s"
+        params.append(bounded_limit)
+
+        with self._database.session(dictionary=True) as (_, cursor):
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+
+        return tuple(
+            SessionListItem(
+                session_id=int(row["session_id"]),
+                gambler_id=int(row["gambler_id"]),
+                status=SessionStatus(str(row["status"])),
+                games_played=int(row["games_played"]),
+                started_at=row["started_at"],
+                ended_at=row["ended_at"],
+                current_stake=_to_money(row["current_stake"], "current_stake"),
+            )
+            for row in rows
+        )
+
     def get_pause_history(self, session_id: int) -> tuple[PauseRecord, ...]:
         self._validate_positive_id(session_id, "session_id")
 
@@ -573,6 +635,7 @@ class GameSessionManager:
                     s.status,
                     s.end_reason,
                     s.games_played,
+                    s.max_games,
                     s.started_at,
                     s.ended_at,
                     s.total_pause_seconds,
@@ -946,6 +1009,7 @@ class GameSessionManager:
             status=SessionStatus(str(row["status"])),
             end_reason=end_reason,
             games_played=int(row["games_played"]),
+            max_games=int(row["max_games"]),
             started_at=row["started_at"],
             ended_at=row["ended_at"],
         )
@@ -964,6 +1028,7 @@ class GameSessionManager:
             status,
             end_reason,
             games_played,
+            max_games,
             started_at,
             ended_at,
             total_pause_seconds,

@@ -39,7 +39,7 @@ class BettingService:
         self._rng = rng or Random()
 
     @validation_guard(
-        operation_name="UC6_PLACE_BET",
+        operation_name="PLACE_BET",
         validator_method="validate_bet_request",
     )
     def place_bet(
@@ -65,7 +65,7 @@ class BettingService:
         )
 
     @validation_guard(
-        operation_name="UC6_PLACE_BET_WITH_STRATEGY",
+        operation_name="PLACE_BET_WITH_STRATEGY",
         validator_method="validate_bet_request",
     )
     def place_bet_with_strategy(
