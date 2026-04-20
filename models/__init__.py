@@ -1,3 +1,4 @@
+from models.betting import BetSettlementResult, ConsecutiveBetSummary
 from models.gambler_profile import BettingPreferences, GamblerProfile
 from models.stake_management import (
     RunningTotalsSnapshot,
@@ -10,6 +11,8 @@ from models.stake_management import (
 
 __all__ = [
 	"BettingPreferences",
+	"BetSettlementResult",
+	"ConsecutiveBetSummary",
 	"GamblerProfile",
 	"RunningTotalsSnapshot",
 	"SessionEndReason",
