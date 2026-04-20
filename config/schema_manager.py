@@ -10,13 +10,17 @@ class SchemaManager:
 
     def initialize_uc1_schema(self) -> None:
         """Backward-compatible initializer for existing callers."""
-        self.initialize_uc3_schema()
+        self.initialize_uc4_schema()
 
     def initialize_uc2_schema(self) -> None:
         """Backward-compatible initializer for existing callers."""
-        self.initialize_uc3_schema()
+        self.initialize_uc4_schema()
 
     def initialize_uc3_schema(self) -> None:
+        """Backward-compatible initializer for existing callers."""
+        self.initialize_uc4_schema()
+
+    def initialize_uc4_schema(self) -> None:
         self._database.ensure_database_exists()
 
         with self._database.session() as (connection, cursor):
@@ -112,6 +116,30 @@ class SchemaManager:
         )
         """
 
+        session_parameters = """
+        CREATE TABLE IF NOT EXISTS SESSION_PARAMETERS (
+            parameter_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            session_id BIGINT NOT NULL UNIQUE,
+            lower_limit DECIMAL(18, 2) NOT NULL,
+            upper_limit DECIMAL(18, 2) NOT NULL,
+            min_bet DECIMAL(18, 2) NOT NULL,
+            max_bet DECIMAL(18, 2) NOT NULL,
+            default_win_probability DECIMAL(5, 4) NOT NULL,
+            max_session_minutes INT NOT NULL,
+            strict_mode BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_session_parameters_session
+                FOREIGN KEY (session_id)
+                REFERENCES SESSIONS(session_id)
+                ON DELETE CASCADE,
+            CONSTRAINT chk_session_parameters_limit_order CHECK (upper_limit > lower_limit),
+            CONSTRAINT chk_session_parameters_bet_order CHECK (max_bet >= min_bet),
+            CONSTRAINT chk_session_parameters_probability_range CHECK (
+                default_win_probability >= 0 AND default_win_probability <= 1
+            )
+        )
+        """
+
         betting_strategies = """
         CREATE TABLE IF NOT EXISTS BETTING_STRATEGIES (
             strategy_id TINYINT AUTO_INCREMENT PRIMARY KEY,
@@ -185,6 +213,26 @@ class SchemaManager:
                 ON DELETE CASCADE,
             CONSTRAINT chk_game_records_stake_non_negative CHECK (stake_after >= 0),
             INDEX idx_game_records_session_resolved (session_id, resolved_at)
+        )
+        """
+
+        pause_records = """
+        CREATE TABLE IF NOT EXISTS PAUSE_RECORDS (
+            pause_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            session_id BIGINT NOT NULL,
+            pause_reason VARCHAR(255) NOT NULL,
+            paused_at DATETIME NOT NULL,
+            resumed_at DATETIME NULL,
+            pause_seconds INT NULL,
+            CONSTRAINT fk_pause_records_session
+                FOREIGN KEY (session_id)
+                REFERENCES SESSIONS(session_id)
+                ON DELETE CASCADE,
+            CONSTRAINT chk_pause_records_pause_seconds CHECK (
+                pause_seconds IS NULL OR pause_seconds >= 0
+            ),
+            INDEX idx_pause_records_session_paused (session_id, paused_at),
+            INDEX idx_pause_records_session_resumed (session_id, resumed_at)
         )
         """
 
@@ -266,9 +314,11 @@ class SchemaManager:
             gamblers,
             betting_preferences,
             sessions,
+            session_parameters,
             betting_strategies,
             bets,
             game_records,
+            pause_records,
             stake_transactions,
             running_totals_snapshots,
         )
