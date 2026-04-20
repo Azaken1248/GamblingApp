@@ -13,12 +13,13 @@ def bootstrap() -> None:
 	settings = load_settings()
 	database = Database(settings=settings)
 	schema_manager = SchemaManager(database=database)
-	schema_manager.initialize_uc2_schema()
+	schema_manager.initialize_uc3_schema()
 
 	console.print(
 		"[bold green]Startup complete.[/bold green] "
-		"UC-01 and UC-02 tables are ready: "
-		"GAMBLERS, BETTING_PREFERENCES, SESSIONS, STAKE_TRANSACTIONS, RUNNING_TOTALS_SNAPSHOTS."
+		"UC-01 to UC-03 tables are ready: "
+		"GAMBLERS, BETTING_PREFERENCES, SESSIONS, BETTING_STRATEGIES, BETS, GAME_RECORDS, "
+		"STAKE_TRANSACTIONS, RUNNING_TOTALS_SNAPSHOTS."
 	)
 
 
