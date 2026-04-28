@@ -40,7 +40,7 @@ The Gambling App is a layered Python system that separates:
 Core characteristics:
 - Uses MySQL with explicit SQL and transaction boundaries.
 - Uses Decimal-based financial arithmetic.
-- Uses decorator-based validation with centralized validation logging to a database audit table.
+- Uses decorator-based validation with centralized validation logging that is queued to Celery and written to the audit table by a worker.
 - Uses strategy pattern for bet sizing (manual/fixed/percentage/martingale).
 - Provides live and end-of-session rich console reporting.
 
@@ -100,6 +100,8 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+Start Redis before the app if you plan to use async audit logging or cached bet metadata.
+
 ### Environment setup
 ```powershell
 Copy-Item .env.example .env
@@ -110,6 +112,13 @@ Then edit `.env` values for your environment.
 ```powershell
 python .\main.py
 ```
+
+In a second terminal, start the Celery worker:
+```powershell
+celery -A tasks worker --loglevel=info
+```
+
+On Windows, use `-P solo` if you hit worker pool issues.
 
 ## 5. Configuration Reference
 Environment variables recognized by `config/settings.py`:
@@ -132,6 +141,11 @@ Environment variables recognized by `config/settings.py`:
 | VALIDATION_STRICT_MODE | bool | true | no | Strict validation behavior |
 | MIN_INITIAL_STAKE | decimal | 100.00 | no | Lower stake guardrail |
 | MAX_INITIAL_STAKE | decimal | 1000000.00 | no | Upper stake guardrail |
+| REDIS_HOST | string | localhost | no | Redis broker/cache host |
+| REDIS_PORT | int | 6379 | no | Redis broker/cache port |
+| REDIS_DB | int | 0 | no | Redis database index |
+| CELERY_BROKER_URL | string | redis://localhost:6379/0 | no | Celery broker URL |
+| CELERY_RESULT_BACKEND | string | redis://localhost:6379/0 | no | Celery result backend |
 
 Validation rule at load time:
 - MIN_INITIAL_STAKE must be <= MAX_INITIAL_STAKE.
@@ -1261,7 +1275,7 @@ This section describes every first-party Python file, including classes, functio
 1. Decorated service methods pass through `validation_guard`.
 2. Validator produces `ValidationResult` warnings/errors.
 3. Invalid operations are blocked on first error.
-4. Validation events are logged to `VALIDATION_EVENTS` for auditability.
+4. Validation events are enqueued to Celery and persisted to `VALIDATION_EVENTS` by the background audit worker.
 
 ### Betting and reporting path
 1. Menu action calls betting/session service methods.
