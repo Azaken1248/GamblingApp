@@ -15,6 +15,8 @@ class RedisCacheManager:
     _BETTING_STRATEGIES_KEY = "cache:betting_strategies"
     _ODDS_CONFIGURATIONS_KEY = "cache:odds_configurations"
     _GAMBLER_LOCK_PREFIX = "lock:gambler:"
+    _TASK_PROGRESS_SUFFIX = ":progress"
+    _TASK_RESULT_SUFFIX = ":result"
 
     def __init__(self, settings: Settings, *, ttl_seconds: int = 3600) -> None:
         self._settings = settings
@@ -90,6 +92,34 @@ class RedisCacheManager:
         encoded = await self._redis.hget(self._ODDS_CONFIGURATIONS_KEY, "default")
         return self._decode_row(encoded)
 
+    async def store_task_progress(self, task_id: str, payload: Mapping[str, Any]) -> None:
+        await self._redis.set(
+            self._task_progress_key(task_id),
+            self._encode_row(payload),
+            ex=self._ttl_seconds,
+        )
+
+    async def get_task_progress(self, task_id: str) -> dict[str, Any] | None:
+        encoded = await self._redis.get(self._task_progress_key(task_id))
+        return self._decode_row(encoded)
+
+    async def store_task_result(self, task_id: str, payload: Mapping[str, Any]) -> None:
+        await self._redis.set(
+            self._task_result_key(task_id),
+            self._encode_row(payload),
+            ex=self._ttl_seconds,
+        )
+
+    async def get_task_result(self, task_id: str) -> dict[str, Any] | None:
+        encoded = await self._redis.get(self._task_result_key(task_id))
+        return self._decode_row(encoded)
+
+    async def clear_task_state(self, task_id: str) -> None:
+        await self._redis.delete(
+            self._task_progress_key(task_id),
+            self._task_result_key(task_id),
+        )
+
     @asynccontextmanager
     async def acquire_gambler_lock(
         self,
@@ -135,6 +165,12 @@ class RedisCacheManager:
 
     def _odds_type(self, odds_row: Mapping[str, Any]) -> str:
         return self._normalize_key(str(odds_row["odds_type"]))
+
+    def _task_progress_key(self, task_id: str) -> str:
+        return f"{task_id}{self._TASK_PROGRESS_SUFFIX}"
+
+    def _task_result_key(self, task_id: str) -> str:
+        return f"{task_id}{self._TASK_RESULT_SUFFIX}"
 
     @staticmethod
     def _encode_row(row: Mapping[str, Any]) -> str:
