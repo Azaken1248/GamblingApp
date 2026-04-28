@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from rich.console import Console
 
 from config.database import Database
@@ -31,7 +33,7 @@ def main() -> None:
     try:
         database, settings = bootstrap()
         menu = InteractiveMenu(database=database, settings=settings, console=console)
-        menu.run()
+        asyncio.run(menu.run())
             
     except SettingsError as exc:
         console.print(f"[bold red]Invalid configuration:[/bold red] {exc}")
