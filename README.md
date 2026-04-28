@@ -1400,7 +1400,3 @@ Recommended minimum:
 
 ---
 
-If you are onboarding:
-1. Start with sections 1 through 11.
-2. Follow with section 16 for exact function inventory.
-3. Use sections 17 through 21 when implementing or reviewing changes.
