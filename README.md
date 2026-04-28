@@ -63,6 +63,7 @@ Core characteristics:
   - Running totals snapshots.
   - Session win/loss KPIs and profile-level aggregate statistics.
   - Rich final report at session closure.
+  - Worker-backed cached report bundles for win/loss and stake history views.
 - Validation and audit:
   - Structured validation warnings/errors.
   - Persistent validation event records for observability.
@@ -122,6 +123,8 @@ celery -A tasks worker --loglevel=info
 On Windows, use `-P solo` if you hit worker pool issues.
 
 Auto-play batches now run in the background worker and the CLI shows a live progress bar while the task updates Redis with progress and the final session summary.
+
+Session closure reports now use a second Celery worker flow: the CLI checks Redis for a cached report bundle first, otherwise it shows a spinner while the worker computes win/loss statistics and stake history, then caches the result for instant reuse.
 
 ## 5. Configuration Reference
 Environment variables recognized by `config/settings.py`:
@@ -1289,9 +1292,11 @@ This section describes every first-party Python file, including classes, functio
 1. Menu action calls betting/session service methods.
 2. Service writes transactional records and snapshots.
 3. End report combines:
-   - `GameSessionManager.get_session_summary`
-   - `WinLossCalculator.get_win_loss_statistics`
-   - `GamblerProfileService.retrieve_profile_statistics`
+  - `GameSessionManager.get_session_summary`
+  - `WinLossCalculator.get_win_loss_statistics`
+  - `StakeManagementService.generate_stake_history_report`
+  - `GamblerProfileService.retrieve_profile_statistics`
+4. `tasks/report_tasks.py` computes the heavy report payload in Celery and stores the cached bundle in Redis for later views.
 
 ## 18. Service-to-Database Interaction Map
 ### BettingService
