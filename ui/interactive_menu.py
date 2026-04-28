@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from config.cache_manager import RedisCacheManager
 from config.database import Database
 from config.settings import Settings
 from models.gambler_profile import BettingPreferences, GamblerProfile
+from models.session_models import SessionSimulationHandle, SessionSummary
 from models.stake_management import SessionEndReason, SessionStatus
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
+from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
 from services.betting_service import BettingService
 from services.game_session_manager import GameSessionManager
@@ -26,18 +30,21 @@ class InteractiveMenu:
         self._database = database
         self._settings = settings
         self._console = console
+        self._task_cache = RedisCacheManager(settings=settings)
 
         self._stake_service = StakeManagementService(database=database, settings=settings)
         self._betting_service = BettingService(
             database=database,
             settings=settings,
             stake_management_service=self._stake_service,
+            cache_manager=self._task_cache,
         )
         self._session_manager = GameSessionManager(
             database=database,
             settings=settings,
             betting_service=self._betting_service,
             stake_management_service=self._stake_service,
+            cache_manager=self._task_cache,
         )
         self._profile_service = GamblerProfileService(database=database, settings=settings)
         self._win_loss_calculator = WinLossCalculator(database=database, settings=settings)
@@ -384,7 +391,8 @@ class InteractiveMenu:
                 elif choice == "2":
                     await self._handle_strategy_bet(gambler_id, session_id)
                 elif choice == "3":
-                    await self._handle_continue_session(session_id)
+                    if not await self._handle_continue_session(session_id):
+                        return
                 elif choice == "4":
                     self._handle_pause(session_id)
                 elif choice == "5":
@@ -499,7 +507,7 @@ class InteractiveMenu:
             self._display_exception(exc)
             self._show_validation_feedback(self._betting_service)
 
-    async def _handle_continue_session(self, session_id: int) -> None:
+    async def _handle_continue_session(self, session_id: int) -> bool:
         try:
             total_games = self._prompt_int("How many games would you like to run", minimum=1)
             self._console.print("\n[bold cyan]Game Run Mode[/bold cyan]")
@@ -554,7 +562,7 @@ class InteractiveMenu:
                 minimum=Decimal("0.0001"),
             )
 
-            continuation = await self._session_manager.continue_session(
+            simulation_handle = await self._session_manager.continue_session(
                 session_id=session_id,
                 total_games=total_games,
                 strategy_code=strategy_code,
@@ -566,17 +574,82 @@ class InteractiveMenu:
                 base_amount=base_amount,
             )
 
-            for result in continuation.results:
-                self._status_display.show_bet_outcome(result)
-
             self._status_display.show_info(
-                (
-                    f"Executed {continuation.executed_games} game(s) out of "
-                    f"{continuation.requested_games} requested."
-                )
+                f"Queued auto-play simulation task {simulation_handle.task_id} for session {session_id}."
             )
+
+            summary = await self._monitor_simulation(simulation_handle)
+            if summary is not None:
+                if summary.lifecycle.status in {
+                    SessionStatus.ENDED_WIN,
+                    SessionStatus.ENDED_LOSS,
+                    SessionStatus.ENDED_MANUAL,
+                    SessionStatus.ENDED_TIMEOUT,
+                }:
+                    self._render_final_report(session_id)
+                    return False
+
+            return True
+
         except Exception as exc:
             self._display_exception(exc)
+            return True
+
+    async def _monitor_simulation(self, handle: SessionSimulationHandle) -> SessionSummary | None:
+        columns = (
+            TextColumn("[bold cyan]{task.description}"),
+            BarColumn(bar_width=None),
+            TaskProgressColumn(),
+            TextColumn("{task.completed}/{task.total} games"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        )
+
+        latest_snapshot = None
+        with Progress(*columns, console=self._console, transient=False) as progress:
+            progress_task = progress.add_task(
+                f"Auto-play session {handle.session_id}",
+                total=handle.requested_games,
+            )
+
+            while True:
+                snapshot = await self._session_manager.get_simulation_progress(handle.task_id)
+                if snapshot is None:
+                    progress.update(
+                        progress_task,
+                        description="Waiting for worker...",
+                        total=handle.requested_games,
+                    )
+                else:
+                    latest_snapshot = snapshot
+                    progress.update(
+                        progress_task,
+                        description=snapshot.message,
+                        total=snapshot.requested_games,
+                        completed=snapshot.completed_games,
+                    )
+                    if snapshot.state in {"SUCCESS", "FAILURE"}:
+                        break
+
+                await asyncio.sleep(0.5)
+
+        if latest_snapshot is None:
+            return None
+
+        if latest_snapshot.state == "SUCCESS":
+            summary = await self._session_manager.get_simulation_result(handle.task_id)
+            if summary is None:
+                summary = await asyncio.to_thread(
+                    self._session_manager.get_session_summary,
+                    handle.session_id,
+                )
+            self._status_display.show_info(
+                f"Auto-play simulation completed after {latest_snapshot.completed_games} game(s)."
+            )
+            return summary
+
+        self._status_display.show_error(latest_snapshot.message)
+        return None
 
     def _handle_pause(self, session_id: int) -> None:
         try:
