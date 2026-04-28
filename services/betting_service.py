@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from random import Random
 from typing import Any, Mapping, Optional
 
+from config.cache_manager import RedisCacheManager
 from config.database import Database
 from config.settings import Settings
 from models.betting import BetSettlementResult, ConsecutiveBetSummary
@@ -27,6 +29,7 @@ class BettingService:
         database: Database,
         settings: Settings,
         stake_management_service: Optional[StakeManagementService] = None,
+        cache_manager: Optional[RedisCacheManager] = None,
         rng: Optional[Random] = None,
     ) -> None:
         self._database = database
@@ -36,13 +39,14 @@ class BettingService:
             database=database,
             settings=settings,
         )
+        self._cache_manager = cache_manager or RedisCacheManager(settings=settings)
         self._rng = rng or Random()
 
     @validation_guard(
         operation_name="PLACE_BET",
         validator_method="validate_bet_request",
     )
-    def place_bet(
+    async def place_bet(
         self,
         gambler_id: int,
         session_id: int,
@@ -52,7 +56,7 @@ class BettingService:
         payout_multiplier: Decimal | int | float | str = Decimal("1.00"),
     ) -> BetSettlementResult:
         normalized_bet = _to_money(bet_amount, "bet_amount")
-        return self._execute_bet(
+        return await self._execute_bet_async(
             gambler_id=gambler_id,
             session_id=session_id,
             strategy_code="MANUAL",
@@ -68,7 +72,7 @@ class BettingService:
         operation_name="PLACE_BET_WITH_STRATEGY",
         validator_method="validate_bet_request",
     )
-    def place_bet_with_strategy(
+    async def place_bet_with_strategy(
         self,
         gambler_id: int,
         session_id: int,
@@ -80,7 +84,7 @@ class BettingService:
         percentage: Decimal | int | float | str | None = None,
         base_amount: Decimal | int | float | str | None = None,
     ) -> BetSettlementResult:
-        return self._execute_bet(
+        return await self._execute_bet_async(
             gambler_id=gambler_id,
             session_id=session_id,
             strategy_code=self._normalize_strategy_code(strategy_code),
@@ -92,7 +96,7 @@ class BettingService:
             base_amount=base_amount,
         )
 
-    def place_consecutive_bets(
+    async def place_consecutive_bets(
         self,
         gambler_id: int,
         session_id: int,
@@ -122,7 +126,7 @@ class BettingService:
         losses = 0
 
         for _ in range(total_bets):
-            result = self._execute_bet(
+            result = await self._execute_bet_async(
                 gambler_id=gambler_id,
                 session_id=session_id,
                 strategy_code=normalized_code,
@@ -143,7 +147,11 @@ class BettingService:
             if result.session_status != SessionStatus.ACTIVE.value:
                 break
 
-        final_stake = results[-1].stake_after if results else self._stake_service.track_current_stake(gambler_id)
+        final_stake = (
+            results[-1].stake_after
+            if results
+            else await asyncio.to_thread(self._stake_service.track_current_stake, gambler_id)
+        )
 
         return ConsecutiveBetSummary(
             session_id=session_id,
@@ -159,6 +167,49 @@ class BettingService:
         threshold = float(win_probability)
         return self._rng.random() < threshold
 
+    async def _execute_bet_async(
+        self,
+        *,
+        gambler_id: int,
+        session_id: int,
+        strategy_code: str,
+        explicit_bet_amount: Decimal | None,
+        win_probability: Decimal,
+        payout_multiplier: Decimal,
+        fixed_amount: Decimal | int | float | str | None,
+        percentage: Decimal | int | float | str | None,
+        base_amount: Decimal | int | float | str | None,
+    ) -> BetSettlementResult:
+        self._validate_positive_id(gambler_id, "gambler_id")
+        self._validate_positive_id(session_id, "session_id")
+
+        strategy_row = await self._resolve_strategy_row_async(strategy_code)
+        odds_configuration = await self._resolve_default_odds_configuration_async()
+
+        try:
+            async with self._cache_manager.acquire_gambler_lock(gambler_id):
+                return await asyncio.to_thread(
+                    self._execute_bet,
+                    gambler_id=gambler_id,
+                    session_id=session_id,
+                    strategy_code=strategy_code,
+                    explicit_bet_amount=explicit_bet_amount,
+                    win_probability=win_probability,
+                    payout_multiplier=payout_multiplier,
+                    fixed_amount=fixed_amount,
+                    percentage=percentage,
+                    base_amount=base_amount,
+                    strategy_row=strategy_row,
+                    odds_configuration=odds_configuration,
+                )
+        except TimeoutError as exc:
+            raise ValidationException(
+                error_type=ValidationErrorType.RANGE_ERROR,
+                field_name="gambler_id",
+                attempted_value=gambler_id,
+                message="Another bet is already being processed for this gambler.",
+            ) from exc
+
     def _execute_bet(
         self,
         *,
@@ -171,6 +222,8 @@ class BettingService:
         fixed_amount: Decimal | int | float | str | None,
         percentage: Decimal | int | float | str | None,
         base_amount: Decimal | int | float | str | None,
+        strategy_row: Mapping[str, Any] | None = None,
+        odds_configuration: Mapping[str, Any] | None = None,
     ) -> BetSettlementResult:
         self._validate_positive_id(gambler_id, "gambler_id")
         self._validate_positive_id(session_id, "session_id")
@@ -248,13 +301,18 @@ class BettingService:
                 max_bet=max_bet,
             )
 
-            strategy_row = self._fetch_strategy_row(cursor, strategy_code)
-            if strategy_row is None:
+            resolved_strategy_row = strategy_row
+            if resolved_strategy_row is None:
+                resolved_strategy_row = self._fetch_strategy_row(cursor, strategy_code)
+
+            if resolved_strategy_row is None:
                 raise NotFoundException(
                     f"Strategy {strategy_code!r} was not found or is inactive."
                 )
 
-            strategy_id = int(strategy_row["strategy_id"])
+            strategy_id = int(resolved_strategy_row["strategy_id"])
+            odds_config_id = self._resolve_odds_config_id(odds_configuration)
+            odds_type = self._resolve_odds_type(odds_configuration)
             potential_win = _to_money(bet_amount * payout_multiplier, "potential_win")
 
             is_win = self.determine_bet_outcome(win_probability)
@@ -301,7 +359,7 @@ class BettingService:
                     game_index,
                     bet_amount,
                     win_probability,
-                    "FIXED",
+                    odds_type,
                     payout_multiplier,
                     potential_win,
                     current_stake,
@@ -324,6 +382,7 @@ class BettingService:
                 INSERT INTO GAME_RECORDS (
                     session_id,
                     bet_id,
+                    odds_config_id,
                     outcome,
                     payout_amount,
                     loss_amount,
@@ -335,11 +394,12 @@ class BettingService:
                     game_duration_ms,
                     resolved_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     session_id,
                     bet_id,
+                    odds_config_id,
                     outcome,
                     payout_amount,
                     loss_amount,
@@ -446,6 +506,32 @@ class BettingService:
                 ),
             )
 
+    async def _resolve_strategy_row_async(
+        self,
+        strategy_code: str,
+    ) -> Mapping[str, Any] | None:
+        cached_strategy = await self._cache_manager.get_betting_strategy(strategy_code)
+        if cached_strategy is not None:
+            return cached_strategy
+
+        strategy_row = await asyncio.to_thread(
+            self._fetch_strategy_row_by_code,
+            strategy_code,
+        )
+        if strategy_row is not None:
+            await self._cache_manager.cache_betting_strategy(strategy_row)
+        return strategy_row
+
+    async def _resolve_default_odds_configuration_async(self) -> Mapping[str, Any] | None:
+        cached_odds = await self._cache_manager.get_default_odds_configuration()
+        if cached_odds is not None:
+            return cached_odds
+
+        odds_configuration = await asyncio.to_thread(self._fetch_default_odds_configuration)
+        if odds_configuration is not None:
+            await self._cache_manager.cache_odds_configuration(odds_configuration)
+        return odds_configuration
+
     @staticmethod
     def _insert_stake_transaction(
         *,
@@ -512,6 +598,31 @@ class BettingService:
             (strategy_code,),
         )
         return cursor.fetchone()
+
+    def _fetch_strategy_row_by_code(self, strategy_code: str) -> Mapping[str, Any] | None:
+        with self._database.session(dictionary=True) as (_, cursor):
+            return self._fetch_strategy_row(cursor, strategy_code)
+
+    def _fetch_default_odds_configuration(self) -> Mapping[str, Any] | None:
+        with self._database.session(dictionary=True) as (_, cursor):
+            cursor.execute(
+                """
+                SELECT
+                    odds_config_id,
+                    odds_type,
+                    fixed_multiplier,
+                    american_odds,
+                    decimal_odds,
+                    probability_payout_factor,
+                    house_edge,
+                    is_default
+                FROM ODDS_CONFIGURATIONS
+                WHERE is_default = TRUE
+                ORDER BY odds_config_id
+                LIMIT 1
+                """
+            )
+            return cursor.fetchone()
 
     @staticmethod
     def _compute_consecutive_streaks(
@@ -751,3 +862,25 @@ class BettingService:
             )
 
         return normalized
+
+    @staticmethod
+    def _resolve_odds_config_id(odds_configuration: Mapping[str, Any] | None) -> int | None:
+        if odds_configuration is None:
+            return None
+
+        odds_config_id = odds_configuration.get("odds_config_id")
+        if odds_config_id is None:
+            return None
+
+        return int(odds_config_id)
+
+    @staticmethod
+    def _resolve_odds_type(odds_configuration: Mapping[str, Any] | None) -> str:
+        if odds_configuration is None:
+            return "FIXED"
+
+        odds_type = odds_configuration.get("odds_type")
+        if odds_type is None:
+            return "FIXED"
+
+        return str(odds_type)
