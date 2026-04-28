@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 from contextlib import asynccontextmanager
 from typing import Any, Mapping, Sequence
@@ -14,6 +15,12 @@ from config.settings import Settings
 class RedisCacheManager:
     _BETTING_STRATEGIES_KEY = "cache:betting_strategies"
     _ODDS_CONFIGURATIONS_KEY = "cache:odds_configurations"
+    _REPORT_BUNDLE_PREFIX = "cache:report:bundle:"
+    _REPORT_PROGRESS_PREFIX = "cache:report:progress:"
+    _REPORT_SESSION_SUMMARY_PREFIX = "cache:report:session_summary:"
+    _REPORT_WIN_LOSS_PREFIX = "cache:report:win_loss:"
+    _REPORT_STAKE_HISTORY_PREFIX = "cache:report:stake_history:"
+    _REPORT_GAMBLER_STATS_PREFIX = "cache:report:gambler_stats:"
     _GAMBLER_LOCK_PREFIX = "lock:gambler:"
     _TASK_PROGRESS_SUFFIX = ":progress"
     _TASK_RESULT_SUFFIX = ":result"
@@ -91,6 +98,79 @@ class RedisCacheManager:
     async def get_default_odds_configuration(self) -> dict[str, Any] | None:
         encoded = await self._redis.hget(self._ODDS_CONFIGURATIONS_KEY, "default")
         return self._decode_row(encoded)
+
+    async def store_report_progress(self, session_id: int, payload: Mapping[str, Any]) -> None:
+        await self._redis.set(
+            self._report_progress_key(session_id),
+            self._encode_row(payload),
+            ex=self._ttl_seconds,
+        )
+
+    async def get_report_progress(self, session_id: int) -> dict[str, Any] | None:
+        encoded = await self._redis.get(self._report_progress_key(session_id))
+        return self._decode_row(encoded)
+
+    async def store_session_report_bundle(self, session_id: int, payload: Mapping[str, Any]) -> None:
+        payload_dict = dict(payload)
+
+        await self._redis.set(
+            self._report_bundle_key(session_id),
+            self._encode_row(payload_dict),
+            ex=self._ttl_seconds,
+        )
+        await self._redis.set(
+            self._report_session_summary_key(session_id),
+            self._encode_row(payload_dict["session_summary"]),
+            ex=self._ttl_seconds,
+        )
+        await self._redis.set(
+            self._report_win_loss_key(session_id),
+            self._encode_row(payload_dict["win_loss_statistics"]),
+            ex=self._ttl_seconds,
+        )
+        await self._redis.set(
+            self._report_stake_history_key(session_id),
+            self._encode_row(payload_dict["stake_history_report"]),
+            ex=self._ttl_seconds,
+        )
+        await self._redis.set(
+            self._report_gambler_stats_key(session_id),
+            self._encode_row(payload_dict["gambler_statistics"]),
+            ex=self._ttl_seconds,
+        )
+
+    async def get_session_report_bundle(self, session_id: int) -> dict[str, Any] | None:
+        encoded = await self._redis.get(self._report_bundle_key(session_id))
+        if encoded is not None:
+            return self._decode_row(encoded)
+
+        session_summary = await self._redis.get(self._report_session_summary_key(session_id))
+        win_loss_statistics = await self._redis.get(self._report_win_loss_key(session_id))
+        stake_history_report = await self._redis.get(self._report_stake_history_key(session_id))
+        gambler_statistics = await self._redis.get(self._report_gambler_stats_key(session_id))
+
+        if not all((session_summary, win_loss_statistics, stake_history_report, gambler_statistics)):
+            return None
+
+        return {
+            "session_id": session_id,
+            "gambler_id": self._extract_nested_gambler_id(session_summary, win_loss_statistics),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "session_summary": self._decode_row(session_summary),
+            "win_loss_statistics": self._decode_row(win_loss_statistics),
+            "stake_history_report": self._decode_row(stake_history_report),
+            "gambler_statistics": self._decode_row(gambler_statistics),
+        }
+
+    async def clear_session_report_state(self, session_id: int) -> None:
+        await self._redis.delete(
+            self._report_progress_key(session_id),
+            self._report_bundle_key(session_id),
+            self._report_session_summary_key(session_id),
+            self._report_win_loss_key(session_id),
+            self._report_stake_history_key(session_id),
+            self._report_gambler_stats_key(session_id),
+        )
 
     async def store_task_progress(self, task_id: str, payload: Mapping[str, Any]) -> None:
         await self._redis.set(
@@ -171,6 +251,33 @@ class RedisCacheManager:
 
     def _task_result_key(self, task_id: str) -> str:
         return f"{task_id}{self._TASK_RESULT_SUFFIX}"
+
+    def _report_bundle_key(self, session_id: int) -> str:
+        return f"{self._REPORT_BUNDLE_PREFIX}{session_id}"
+
+    def _report_progress_key(self, session_id: int) -> str:
+        return f"{self._REPORT_PROGRESS_PREFIX}{session_id}"
+
+    def _report_session_summary_key(self, session_id: int) -> str:
+        return f"{self._REPORT_SESSION_SUMMARY_PREFIX}{session_id}"
+
+    def _report_win_loss_key(self, session_id: int) -> str:
+        return f"{self._REPORT_WIN_LOSS_PREFIX}{session_id}"
+
+    def _report_stake_history_key(self, session_id: int) -> str:
+        return f"{self._REPORT_STAKE_HISTORY_PREFIX}{session_id}"
+
+    def _report_gambler_stats_key(self, session_id: int) -> str:
+        return f"{self._REPORT_GAMBLER_STATS_PREFIX}{session_id}"
+
+    @staticmethod
+    def _extract_nested_gambler_id(*payloads: str) -> int:
+        for payload in payloads:
+            decoded = json.loads(payload)
+            gambler_id = decoded.get("gambler_id")
+            if gambler_id is not None:
+                return int(gambler_id)
+        raise KeyError("Unable to infer gambler_id from report cache payloads.")
 
     @staticmethod
     def _encode_row(row: Mapping[str, Any]) -> str:
