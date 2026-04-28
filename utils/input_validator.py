@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -31,14 +32,13 @@ def validation_guard(
     def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
         function_signature = inspect.signature(function)
 
-        @wraps(function)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        def _validate_call(*args: Any, **kwargs: Any) -> None:
             bound = function_signature.bind(*args, **kwargs)
             bound.apply_defaults()
 
             service_instance = bound.arguments.get("self")
             if service_instance is None:
-                return function(*args, **kwargs)
+                return
 
             validator = _resolve_validator(service_instance)
             payload = {
@@ -83,6 +83,18 @@ def validation_guard(
                     )
                 raise first_error.to_exception()
 
+        if inspect.iscoroutinefunction(function):
+
+            @wraps(function)
+            async def wrapper(*args: Any, **kwargs: Any) -> Any:
+                await asyncio.to_thread(_validate_call, *args, **kwargs)
+                return await function(*args, **kwargs)
+
+            return wrapper
+
+        @wraps(function)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            _validate_call(*args, **kwargs)
             return function(*args, **kwargs)
 
         return wrapper
