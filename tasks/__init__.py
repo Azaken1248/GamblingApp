@@ -97,3 +97,4 @@ def ping() -> str:
 
 
 from . import audit_tasks as audit_tasks
+from . import simulation_tasks as simulation_tasks
