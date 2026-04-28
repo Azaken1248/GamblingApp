@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Mapping, Optional
@@ -246,7 +247,7 @@ class GameSessionManager:
 
         return self.get_session_lifecycle_state(session_id)
 
-    def continue_session(
+    async def continue_session(
         self,
         session_id: int,
         total_games: int,
@@ -273,14 +274,14 @@ class GameSessionManager:
         gambler_id: int | None = None
 
         for _ in range(total_games):
-            lifecycle = self.get_session_lifecycle_state(session_id)
+            lifecycle = await asyncio.to_thread(self.get_session_lifecycle_state, session_id)
             gambler_id = lifecycle.gambler_id
 
             if lifecycle.status != SessionStatus.ACTIVE:
                 break
 
-            if self._is_session_timed_out(session_id):
-                self._end_as_timeout(session_id)
+            if await asyncio.to_thread(self._is_session_timed_out, session_id):
+                await asyncio.to_thread(self._end_as_timeout, session_id)
                 break
 
             if strategy == "MANUAL":
@@ -291,7 +292,7 @@ class GameSessionManager:
                         attempted_value=bet_amount,
                         message="bet_amount is required for MANUAL strategy.",
                     )
-                result = self._betting_service.place_bet(
+                result = await self._betting_service.place_bet(
                     gambler_id=gambler_id,
                     session_id=session_id,
                     bet_amount=bet_amount,
@@ -299,7 +300,7 @@ class GameSessionManager:
                     payout_multiplier=payout_multiplier,
                 )
             else:
-                result = self._betting_service.place_bet_with_strategy(
+                result = await self._betting_service.place_bet_with_strategy(
                     gambler_id=gambler_id,
                     session_id=session_id,
                     strategy_code=strategy,
@@ -314,7 +315,7 @@ class GameSessionManager:
             if result.session_status != SessionStatus.ACTIVE.value:
                 break
 
-        summary = self.get_session_summary(session_id)
+        summary = await asyncio.to_thread(self.get_session_summary, session_id)
 
         return SessionContinuationResult(
             session_id=session_id,
