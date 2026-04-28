@@ -50,7 +50,7 @@ class InteractiveMenu:
         self._win_loss_calculator = WinLossCalculator(database=database, settings=settings)
 
         self._status_display = GameStatusDisplay(console=console)
-        self._summary_renderer = SessionSummaryRenderer(console=console)
+        self._summary_renderer = SessionSummaryRenderer(console=console, cache_manager=self._task_cache)
 
     async def run(self) -> None:
         self._status_display.show_banner()
@@ -349,7 +349,7 @@ class InteractiveMenu:
                 SessionStatus.ENDED_MANUAL,
                 SessionStatus.ENDED_TIMEOUT,
             }:
-                self._render_final_report(session_id)
+                await self._render_final_report(session_id)
                 return
 
             if status == SessionStatus.PAUSED:
@@ -366,9 +366,9 @@ class InteractiveMenu:
                 if choice == "1":
                     self._handle_resume(session_id)
                 elif choice == "2":
-                    self._handle_end_session(session_id)
+                    await self._handle_end_session(session_id)
                 elif choice == "3":
-                    self._render_final_report(session_id)
+                    await self._render_final_report(session_id)
                 else:
                     self._status_display.show_warning("Leaving the session paused.")
                     return
@@ -396,7 +396,7 @@ class InteractiveMenu:
                 elif choice == "4":
                     self._handle_pause(session_id)
                 elif choice == "5":
-                    self._handle_end_session(session_id)
+                    await self._handle_end_session(session_id)
                 elif choice == "6":
                     continue
                 else:
@@ -405,7 +405,7 @@ class InteractiveMenu:
                         default=False,
                     )
                     if should_end:
-                        self._handle_end_session(session_id)
+                        await self._handle_end_session(session_id)
                     return
 
     async def _handle_manual_bet(self, gambler_id: int, session_id: int) -> None:
@@ -586,7 +586,7 @@ class InteractiveMenu:
                     SessionStatus.ENDED_MANUAL,
                     SessionStatus.ENDED_TIMEOUT,
                 }:
-                    self._render_final_report(session_id)
+                    await self._render_final_report(session_id)
                     return False
 
             return True
@@ -669,7 +669,7 @@ class InteractiveMenu:
         except Exception as exc:
             self._display_exception(exc)
 
-    def _handle_end_session(self, session_id: int) -> None:
+    async def _handle_end_session(self, session_id: int) -> None:
         try:
             self._console.print("\n[bold cyan]End Session[/bold cyan]")
             self._console.print("[white]1.[/white] End manually now")
@@ -684,22 +684,13 @@ class InteractiveMenu:
             )
             self._session_manager.end_session(session_id=session_id, end_reason=end_reason)
             self._status_display.show_info("Session ended.")
-            self._render_final_report(session_id)
+            await self._render_final_report(session_id)
         except Exception as exc:
             self._display_exception(exc)
 
-    def _render_final_report(self, session_id: int) -> None:
+    async def _render_final_report(self, session_id: int) -> None:
         try:
-            session_summary = self._session_manager.get_session_summary(session_id)
-            win_loss_statistics = self._win_loss_calculator.get_win_loss_statistics(session_id)
-            gambler_statistics = self._profile_service.retrieve_profile_statistics(
-                session_summary.lifecycle.gambler_id
-            )
-            self._summary_renderer.render_end_of_session(
-                session_summary=session_summary,
-                win_loss_statistics=win_loss_statistics,
-                gambler_statistics=gambler_statistics,
-            )
+            await self._summary_renderer.present_end_of_session(session_id)
         except Exception as exc:
             self._display_exception(exc)
 
