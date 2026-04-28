@@ -836,75 +836,33 @@ class InputValidator:
         payload: Mapping[str, Any],
     ) -> None:
         context_json = self._safe_context_json(payload)
+        issue_payloads = [
+            {
+                "severity": issue.severity.value,
+                "error_type": None if issue.error_type is None else issue.error_type.value,
+                "field_name": issue.field_name,
+                "attempted_value": None
+                if issue.attempted_value is None
+                else self._trim(str(issue.attempted_value), 255),
+                "message": self._trim(issue.message, 512),
+                "user_message": self._trim(issue.user_message, 512),
+                "is_recoverable": issue.is_recoverable,
+            }
+            for issue in result.issues
+        ]
+
+        audit_payload = {
+            "operation_name": operation_name,
+            "service_name": service_name,
+            "method_name": method_name,
+            "context_json": context_json,
+            "issues": issue_payloads,
+        }
 
         try:
-            with self._database.session() as (connection, cursor):
-                if result.issues:
-                    for issue in result.issues:
-                        cursor.execute(
-                            """
-                            INSERT INTO VALIDATION_EVENTS (
-                                operation_name,
-                                service_name,
-                                method_name,
-                                severity,
-                                error_type,
-                                field_name,
-                                attempted_value,
-                                message,
-                                user_message,
-                                is_recoverable,
-                                context_json
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """,
-                            (
-                                operation_name,
-                                service_name,
-                                method_name,
-                                issue.severity.value,
-                                issue.error_type.value,
-                                issue.field_name,
-                                self._trim(str(issue.attempted_value), 255),
-                                self._trim(issue.message, 512),
-                                self._trim(issue.user_message, 512),
-                                issue.is_recoverable,
-                                context_json,
-                            ),
-                        )
-                else:
-                    cursor.execute(
-                        """
-                        INSERT INTO VALIDATION_EVENTS (
-                            operation_name,
-                            service_name,
-                            method_name,
-                            severity,
-                            error_type,
-                            field_name,
-                            attempted_value,
-                            message,
-                            user_message,
-                            is_recoverable,
-                            context_json
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            operation_name,
-                            service_name,
-                            method_name,
-                            "INFO",
-                            None,
-                            None,
-                            None,
-                            "Validation passed.",
-                            "Validation passed.",
-                            True,
-                            context_json,
-                        ),
-                    )
-                connection.commit()
+            from tasks.audit_tasks import persist_validation_events
+
+            persist_validation_events.delay(audit_payload)
         except Exception:
             return
 
