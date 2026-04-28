@@ -30,6 +30,11 @@ class Settings:
     validation_strict_mode: bool
     min_initial_stake: Decimal
     max_initial_stake: Decimal
+    redis_host: str
+    redis_port: int
+    redis_db: int
+    celery_broker_url: str
+    celery_result_backend: str
 
 
 _ENV_LOADED = False
@@ -163,6 +168,17 @@ def load_settings() -> Settings:
         validation_strict_mode=_bool("VALIDATION_STRICT_MODE", True),
         min_initial_stake=_decimal("MIN_INITIAL_STAKE", default=Decimal("1.00")),
         max_initial_stake=_decimal("MAX_INITIAL_STAKE", default=Decimal("1000000.00")),
+        redis_host=_optional_str("REDIS_HOST", "localhost"),
+        redis_port=_int("REDIS_PORT", default=6379, min_value=1),
+        redis_db=_int("REDIS_DB", default=0, min_value=0),
+        celery_broker_url=_optional_str(
+            "CELERY_BROKER_URL",
+            "redis://localhost:6379/0",
+        ),
+        celery_result_backend=_optional_str(
+            "CELERY_RESULT_BACKEND",
+            "redis://localhost:6379/0",
+        ),
     )
 
     if settings.min_initial_stake > settings.max_initial_stake:
