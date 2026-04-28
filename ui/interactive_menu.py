@@ -45,7 +45,7 @@ class InteractiveMenu:
         self._status_display = GameStatusDisplay(console=console)
         self._summary_renderer = SessionSummaryRenderer(console=console)
 
-    def run(self) -> None:
+    async def run(self) -> None:
         self._status_display.show_banner()
 
         gambler_id = self._resolve_gambler_id()
@@ -58,7 +58,7 @@ class InteractiveMenu:
             self._status_display.show_info("No session selected. See you next time.")
             return
 
-        self._session_loop(gambler_id=gambler_id, session_id=session_id)
+        await self._session_loop(gambler_id=gambler_id, session_id=session_id)
 
     def _resolve_gambler_id(self) -> int | None:
         while True:
@@ -325,7 +325,7 @@ class InteractiveMenu:
             self._display_exception(exc)
             return None
 
-    def _session_loop(self, *, gambler_id: int, session_id: int) -> None:
+    async def _session_loop(self, *, gambler_id: int, session_id: int) -> None:
         while True:
             try:
                 summary = self._session_manager.get_session_summary(session_id)
@@ -380,11 +380,11 @@ class InteractiveMenu:
                     default="6",
                 )
                 if choice == "1":
-                    self._handle_manual_bet(gambler_id, session_id)
+                    await self._handle_manual_bet(gambler_id, session_id)
                 elif choice == "2":
-                    self._handle_strategy_bet(gambler_id, session_id)
+                    await self._handle_strategy_bet(gambler_id, session_id)
                 elif choice == "3":
-                    self._handle_continue_session(session_id)
+                    await self._handle_continue_session(session_id)
                 elif choice == "4":
                     self._handle_pause(session_id)
                 elif choice == "5":
@@ -400,7 +400,7 @@ class InteractiveMenu:
                         self._handle_end_session(session_id)
                     return
 
-    def _handle_manual_bet(self, gambler_id: int, session_id: int) -> None:
+    async def _handle_manual_bet(self, gambler_id: int, session_id: int) -> None:
         try:
             bet_amount = self._prompt_decimal("Bet amount", minimum=Decimal("0.01"))
             use_default_probability = Confirm.ask(
@@ -421,7 +421,7 @@ class InteractiveMenu:
                 minimum=Decimal("0.0001"),
             )
 
-            result = self._betting_service.place_bet(
+            result = await self._betting_service.place_bet(
                 gambler_id=gambler_id,
                 session_id=session_id,
                 bet_amount=bet_amount,
@@ -434,7 +434,7 @@ class InteractiveMenu:
             self._display_exception(exc)
             self._show_validation_feedback(self._betting_service)
 
-    def _handle_strategy_bet(self, gambler_id: int, session_id: int) -> None:
+    async def _handle_strategy_bet(self, gambler_id: int, session_id: int) -> None:
         try:
             self._console.print("\n[bold cyan]Strategy Options[/bold cyan]")
             self._console.print("[white]1.[/white] Fixed amount")
@@ -483,7 +483,7 @@ class InteractiveMenu:
                     minimum=Decimal("0.01"),
                 )
 
-            result = self._betting_service.place_bet_with_strategy(
+            result = await self._betting_service.place_bet_with_strategy(
                 gambler_id=gambler_id,
                 session_id=session_id,
                 strategy_code=strategy_code,
@@ -499,7 +499,7 @@ class InteractiveMenu:
             self._display_exception(exc)
             self._show_validation_feedback(self._betting_service)
 
-    def _handle_continue_session(self, session_id: int) -> None:
+    async def _handle_continue_session(self, session_id: int) -> None:
         try:
             total_games = self._prompt_int("How many games would you like to run", minimum=1)
             self._console.print("\n[bold cyan]Game Run Mode[/bold cyan]")
@@ -554,7 +554,7 @@ class InteractiveMenu:
                 minimum=Decimal("0.0001"),
             )
 
-            continuation = self._session_manager.continue_session(
+            continuation = await self._session_manager.continue_session(
                 session_id=session_id,
                 total_games=total_games,
                 strategy_code=strategy_code,
