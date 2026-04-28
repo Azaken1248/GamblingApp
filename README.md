@@ -41,6 +41,7 @@ Core characteristics:
 - Uses MySQL with explicit SQL and transaction boundaries.
 - Uses Decimal-based financial arithmetic.
 - Uses decorator-based validation with centralized validation logging that is queued to Celery and written to the audit table by a worker.
+- Uses Celery-backed auto-play simulation jobs for large multi-game session batches.
 - Uses strategy pattern for bet sizing (manual/fixed/percentage/martingale).
 - Provides live and end-of-session rich console reporting.
 
@@ -119,6 +120,8 @@ celery -A tasks worker --loglevel=info
 ```
 
 On Windows, use `-P solo` if you hit worker pool issues.
+
+Auto-play batches now run in the background worker and the CLI shows a live progress bar while the task updates Redis with progress and the final session summary.
 
 ## 5. Configuration Reference
 Environment variables recognized by `config/settings.py`:
@@ -1276,6 +1279,11 @@ This section describes every first-party Python file, including classes, functio
 2. Validator produces `ValidationResult` warnings/errors.
 3. Invalid operations are blocked on first error.
 4. Validation events are enqueued to Celery and persisted to `VALIDATION_EVENTS` by the background audit worker.
+
+### Auto-play path
+1. `GameSessionManager.continue_session` submits a Celery job instead of running the loop inline.
+2. `tasks/simulation_tasks.py` executes the game loop and writes progress to Redis under `<task_id>:progress`.
+3. The CLI polls progress and renders a Rich progress bar until the worker writes the final summary to `<task_id>:result`.
 
 ### Betting and reporting path
 1. Menu action calls betting/session service methods.
