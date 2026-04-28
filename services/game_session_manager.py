@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Mapping, Optional
+from typing import Any, Awaitable, Callable, Mapping, Optional
 
+from config.cache_manager import RedisCacheManager
 from config.database import Database
 from config.settings import Settings
 from models.session_models import (
@@ -14,7 +15,10 @@ from models.session_models import (
     SessionListItem,
     SessionLifecycleState,
     SessionParameters,
+    SessionSimulationHandle,
+    SessionSimulationProgress,
     SessionSummary,
+    session_summary_from_payload,
 )
 from models.stake_management import SessionEndReason, SessionStatus, TransactionType
 from services.betting_service import BettingService
@@ -33,10 +37,12 @@ class GameSessionManager:
         settings: Settings,
         betting_service: Optional[BettingService] = None,
         stake_management_service: Optional[StakeManagementService] = None,
+        cache_manager: Optional[RedisCacheManager] = None,
     ) -> None:
         self._database = database
         self._settings = settings
         self._last_validation_result = None
+        self._task_cache = cache_manager or RedisCacheManager(settings=settings)
         self._stake_service = stake_management_service or StakeManagementService(
             database=database,
             settings=settings,
@@ -45,6 +51,7 @@ class GameSessionManager:
             database=database,
             settings=settings,
             stake_management_service=self._stake_service,
+            cache_manager=self._task_cache,
         )
 
     @validation_guard(
@@ -259,6 +266,61 @@ class GameSessionManager:
         fixed_amount: Decimal | int | float | str | None = None,
         percentage: Decimal | int | float | str | None = None,
         base_amount: Decimal | int | float | str | None = None,
+    ) -> SessionSimulationHandle:
+        self._validate_positive_id(session_id, "session_id")
+        if total_games <= 0:
+            raise ValidationException(
+                error_type=ValidationErrorType.RANGE_ERROR,
+                field_name="total_games",
+                attempted_value=total_games,
+                message="total_games must be a positive integer.",
+            )
+
+        strategy = strategy_code.strip().upper()
+        lifecycle = await asyncio.to_thread(self.get_session_lifecycle_state, session_id)
+        if lifecycle.status != SessionStatus.ACTIVE:
+            raise ValidationException(
+                error_type=ValidationErrorType.RANGE_ERROR,
+                field_name="status",
+                attempted_value=lifecycle.status.value,
+                message="Session must be ACTIVE before scheduling auto-play.",
+            )
+
+        if strategy == "MANUAL" and bet_amount is None:
+            raise ValidationException(
+                error_type=ValidationErrorType.NULL_ERROR,
+                field_name="bet_amount",
+                attempted_value=bet_amount,
+                message="bet_amount is required for MANUAL strategy.",
+            )
+
+        return await asyncio.to_thread(
+            self._queue_session_simulation,
+            session_id,
+            lifecycle.gambler_id,
+            total_games,
+            strategy,
+            bet_amount,
+            win_probability,
+            payout_multiplier,
+            fixed_amount,
+            percentage,
+            base_amount,
+        )
+
+    async def execute_continued_session(
+        self,
+        session_id: int,
+        total_games: int,
+        *,
+        strategy_code: str = "MANUAL",
+        bet_amount: Decimal | int | float | str | None = None,
+        win_probability: Decimal | int | float | str | None = None,
+        payout_multiplier: Decimal | int | float | str = Decimal("1.00"),
+        fixed_amount: Decimal | int | float | str | None = None,
+        percentage: Decimal | int | float | str | None = None,
+        base_amount: Decimal | int | float | str | None = None,
+        progress_callback: Callable[[int, int, str], Awaitable[None]] | None = None,
     ) -> SessionContinuationResult:
         self._validate_positive_id(session_id, "session_id")
         if total_games <= 0:
@@ -312,6 +374,13 @@ class GameSessionManager:
                 )
 
             results.append(result)
+            if progress_callback is not None:
+                await progress_callback(
+                    len(results),
+                    total_games,
+                    f"Game {len(results)} of {total_games} completed.",
+                )
+
             if result.session_status != SessionStatus.ACTIVE.value:
                 break
 
@@ -324,6 +393,77 @@ class GameSessionManager:
             executed_games=len(results),
             results=tuple(results),
             summary=summary,
+        )
+
+    async def get_simulation_progress(self, task_id: str) -> SessionSimulationProgress | None:
+        payload = await self._task_cache.get_task_progress(task_id)
+        if payload is None:
+            return None
+
+        requested_games = int(payload.get("requested_games", 0))
+        completed_games = int(payload.get("completed_games", 0))
+        percentage = float(payload.get("percentage", 0.0))
+
+        return SessionSimulationProgress(
+            task_id=str(payload.get("task_id", task_id)),
+            session_id=int(payload.get("session_id", 0)),
+            gambler_id=int(payload.get("gambler_id", 0)),
+            requested_games=requested_games,
+            completed_games=completed_games,
+            percentage=percentage,
+            state=str(payload.get("state", "PENDING")),
+            message=str(payload.get("message", "Waiting for worker.")),
+        )
+
+    async def get_simulation_result(self, task_id: str) -> SessionSummary | None:
+        payload = await self._task_cache.get_task_result(task_id)
+        if payload is None:
+            return None
+
+        summary_payload = payload.get("summary")
+        if not isinstance(summary_payload, Mapping):
+            return None
+
+        return session_summary_from_payload(summary_payload)
+
+    def _queue_session_simulation(
+        self,
+        session_id: int,
+        gambler_id: int,
+        total_games: int,
+        strategy_code: str,
+        bet_amount: Decimal | int | float | str | None,
+        win_probability: Decimal | int | float | str | None,
+        payout_multiplier: Decimal | int | float | str,
+        fixed_amount: Decimal | int | float | str | None,
+        percentage: Decimal | int | float | str | None,
+        base_amount: Decimal | int | float | str | None,
+    ) -> SessionSimulationHandle:
+        from tasks.simulation_tasks import run_session_simulation
+
+        payload = {
+            "session_id": session_id,
+            "gambler_id": gambler_id,
+            "total_games": total_games,
+            "strategy_code": strategy_code,
+            "bet_amount": None if bet_amount is None else str(bet_amount),
+            "win_probability": None if win_probability is None else str(win_probability),
+            "payout_multiplier": str(payout_multiplier),
+            "fixed_amount": None if fixed_amount is None else str(fixed_amount),
+            "percentage": None if percentage is None else str(percentage),
+            "base_amount": None if base_amount is None else str(base_amount),
+        }
+
+        async_result = run_session_simulation.apply_async(kwargs={"simulation_payload": payload})
+        task_id = async_result.id
+        if task_id is None:
+            raise RuntimeError("Celery did not return a task id for the simulation job.")
+
+        return SessionSimulationHandle(
+            task_id=task_id,
+            session_id=session_id,
+            gambler_id=gambler_id,
+            requested_games=total_games,
         )
 
     def pause_session(
