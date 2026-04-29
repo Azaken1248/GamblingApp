@@ -21,7 +21,8 @@ class GameStatusDisplay:
         self._console.print(
             Panel(
                 "Interactive Session Console\n"
-                "Guided setup, betting flow, real-time outcomes, and final summary.",
+                "Guided setup, betting flow, real-time outcomes, and final summary.\n"
+                "Browser-hosted ttyd mode works best if you press Enter when prompted after reports.",
                 title="Gambling App",
                 border_style="cyan",
             )
