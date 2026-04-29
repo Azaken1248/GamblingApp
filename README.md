@@ -122,9 +122,14 @@ celery -A tasks worker --loglevel=info
 
 On Windows, use `-P solo` if you hit worker pool issues.
 
+If you want to host the app in a browser terminal with ttyd, keep the Celery worker running and launch the CLI through ttyd as well:
+```powershell
+ttyd .\.venv\Scripts\python.exe .\main.py
+```
+
 Auto-play batches now run in the background worker and the CLI shows a live progress bar while the task updates Redis with progress and the final session summary.
 
-Session closure reports now use a second Celery worker flow: the CLI checks Redis for a cached report bundle first, otherwise it shows a spinner while the worker computes win/loss statistics and stake history, then caches the result for instant reuse.
+Session closure reports now use a second Celery worker flow: the CLI checks Redis for a cached report bundle first, otherwise it shows a spinner while the worker computes win/loss statistics and stake history, then caches the result for instant reuse. After the final report renders, the menu waits for Enter before returning to player setup so the browser terminal does not close on you.
 
 ## 5. Configuration Reference
 Environment variables recognized by `config/settings.py`:
