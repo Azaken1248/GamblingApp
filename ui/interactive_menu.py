@@ -18,7 +18,6 @@ from services.betting_service import BettingService
 from services.game_session_manager import GameSessionManager
 from services.gambler_profile_service import GamblerProfileService
 from services.stake_management_service import StakeManagementService
-from services.win_loss_calculator import WinLossCalculator
 from ui.game_status_display import GameStatusDisplay
 from ui.session_summary import SessionSummaryRenderer
 from utils.exceptions import DataAccessException, NotFoundException, ValidationException
@@ -47,7 +46,6 @@ class InteractiveMenu:
             cache_manager=self._task_cache,
         )
         self._profile_service = GamblerProfileService(database=database, settings=settings)
-        self._win_loss_calculator = WinLossCalculator(database=database, settings=settings)
 
         self._status_display = GameStatusDisplay(console=console)
         self._summary_renderer = SessionSummaryRenderer(console=console, cache_manager=self._task_cache)
@@ -55,17 +53,21 @@ class InteractiveMenu:
     async def run(self) -> None:
         self._status_display.show_banner()
 
-        gambler_id = self._resolve_gambler_id()
-        if gambler_id is None:
-            self._status_display.show_info("No profile selected. See you next time.")
-            return
+        try:
+            while True:
+                gambler_id = self._resolve_gambler_id()
+                if gambler_id is None:
+                    self._status_display.show_info("No profile selected. See you next time.")
+                    return
 
-        session_id = self._resolve_session_id(gambler_id)
-        if session_id is None:
-            self._status_display.show_info("No session selected. See you next time.")
-            return
+                session_id = self._resolve_session_id(gambler_id)
+                if session_id is None:
+                    self._status_display.show_info("No session selected. See you next time.")
+                    return
 
-        await self._session_loop(gambler_id=gambler_id, session_id=session_id)
+                await self._session_loop(gambler_id=gambler_id, session_id=session_id)
+        finally:
+            await self._task_cache.close()
 
     def _resolve_gambler_id(self) -> int | None:
         while True:
@@ -349,7 +351,7 @@ class InteractiveMenu:
                 SessionStatus.ENDED_MANUAL,
                 SessionStatus.ENDED_TIMEOUT,
             }:
-                await self._render_final_report(session_id)
+                await self._render_final_report(session_id, pause_after_display=True)
                 return
 
             if status == SessionStatus.PAUSED:
@@ -357,7 +359,7 @@ class InteractiveMenu:
                 self._console.print("[white]1.[/white] Resume session")
                 self._console.print("[white]2.[/white] End session")
                 self._console.print("[white]3.[/white] View current report")
-                self._console.print("[white]0.[/white] Exit menu")
+                self._console.print("[white]0.[/white] Return to player setup")
                 choice = Prompt.ask(
                     "Choose what to do next",
                     choices=["1", "2", "3", "0"],
@@ -367,10 +369,11 @@ class InteractiveMenu:
                     self._handle_resume(session_id)
                 elif choice == "2":
                     await self._handle_end_session(session_id)
+                    return
                 elif choice == "3":
                     await self._render_final_report(session_id)
                 else:
-                    self._status_display.show_warning("Leaving the session paused.")
+                    self._status_display.show_info("Returning to player setup with the session still paused.")
                     return
             else:
                 self._console.print("\n[bold cyan]Active Session Actions[/bold cyan]")
@@ -380,7 +383,7 @@ class InteractiveMenu:
                 self._console.print("[white]4.[/white] Pause session")
                 self._console.print("[white]5.[/white] End session")
                 self._console.print("[white]6.[/white] Refresh status")
-                self._console.print("[white]0.[/white] Exit menu")
+                self._console.print("[white]0.[/white] Return to player setup")
                 choice = Prompt.ask(
                     "Choose what to do next",
                     choices=["1", "2", "3", "4", "5", "6", "0"],
@@ -397,15 +400,18 @@ class InteractiveMenu:
                     self._handle_pause(session_id)
                 elif choice == "5":
                     await self._handle_end_session(session_id)
+                    return
                 elif choice == "6":
                     continue
                 else:
                     should_end = Confirm.ask(
-                        "Would you like to end this session before exiting?",
+                        "Would you like to end this session before returning to player setup?",
                         default=False,
                     )
                     if should_end:
                         await self._handle_end_session(session_id)
+                        return
+                    self._status_display.show_info("Returning to player setup without ending the session.")
                     return
 
     async def _handle_manual_bet(self, gambler_id: int, session_id: int) -> None:
@@ -586,7 +592,7 @@ class InteractiveMenu:
                     SessionStatus.ENDED_MANUAL,
                     SessionStatus.ENDED_TIMEOUT,
                 }:
-                    await self._render_final_report(session_id)
+                    await self._render_final_report(session_id, pause_after_display=True)
                     return False
 
             return True
@@ -684,15 +690,22 @@ class InteractiveMenu:
             )
             self._session_manager.end_session(session_id=session_id, end_reason=end_reason)
             self._status_display.show_info("Session ended.")
-            await self._render_final_report(session_id)
+            await self._render_final_report(session_id, pause_after_display=True)
         except Exception as exc:
             self._display_exception(exc)
 
-    async def _render_final_report(self, session_id: int) -> None:
+    async def _render_final_report(self, session_id: int, *, pause_after_display: bool = False) -> None:
         try:
             await self._summary_renderer.present_end_of_session(session_id)
+            if pause_after_display:
+                await self._pause_for_continue(
+                    "Report complete. Press Enter to return to player setup..."
+                )
         except Exception as exc:
             self._display_exception(exc)
+
+    async def _pause_for_continue(self, message: str) -> None:
+        await asyncio.to_thread(self._console.input, f"[bold yellow]{message}[/bold yellow]")
 
     def _show_available_players(self) -> int:
         profiles = self._profile_service.list_profiles(limit=20)
